@@ -42,13 +42,13 @@ AMARELO="\033[1;33m"
 VERMELHO="\033[0;31m"
 RESET_COR="\033[0m"
 
-info()  { echo -e "${VERDE}[✓]${RESET_COR} $1"; }
-aviso() { echo -e "${AMARELO}[!]${RESET_COR} $1"; }
-erro()  { echo -e "${VERMELHO}[✗]${RESET_COR} $1"; }
+info()  { echo -e "${VERDE}[OK]${RESET_COR} $1"; }
+aviso() { echo -e "${AMARELO}[AVISO]${RESET_COR} $1"; }
+erro()  { echo -e "${VERMELHO}[ERRO]${RESET_COR} $1"; }
 
 echo
 echo "=============================================="
-echo "  cam-tool — Setup"
+echo "  cam-tool — Instalação de dependências"
 echo "=============================================="
 echo "  Projeto: $PROJETO_DIR"
 echo "  Venv:    $VENV_DIR"
@@ -95,7 +95,7 @@ else
 fi
 
 info "Bibliotecas instaladas:"
-pip list --format=columns | grep -Ei "dearpygui|opencv|numpy|scikit|pillow|pymediainfo|pandas|openpyxl" || true
+pip list --format=columns | grep -Ei "dearpygui|opencv|numpy|pillow|pymediainfo|pandas|openpyxl" || true
 
 deactivate
 
@@ -107,7 +107,7 @@ else
     cat >> "$BASHRC" << 'EOF'
 
 # ---------- cam-tool ----------
-alias cam-tool='cd ~/cam-tool && source .venv/bin/activate && python -m cam_tool'
+alias cam-tool='cd ~/cam-tool && source .venv/bin/activate && python3 -m cam_tool'
 alias cam-out='xdg-open ~/cam-tool/Output 2>/dev/null || true'
 EOF
     info "Aliases adicionados. Rode: source ~/.bashrc"
@@ -116,13 +116,13 @@ fi
 # ---------- Final ----------
 echo
 echo "=============================================="
-info "Tudo pronto!"
+info "Instalação concluída"
 echo "=============================================="
 echo
-echo "Pra usar agora, rode:"
+echo "Para usar agora, execute:"
 echo "    source ~/.bashrc"
 echo
-echo "Depois é só digitar:"
+echo "Depois:"
 echo "    cam-tool    # abre o programa"
 echo "    cam-out     # abre a pasta de saída"
 echo
