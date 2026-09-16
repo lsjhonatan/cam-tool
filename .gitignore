@@ -1,0 +1,39 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# --- Ambientes virtuais ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- IDEs ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- Sistema ---
+.DS_Store
+Thumbs.db
+
+# --- Saídas do cam-tool ---
+Output/
+Log/
+*.log
+
+# --- Referência (não vai pro repo) ---
+_referencia/
+
+# --- Configurações locais do usuário ---
+# (Settings.txt é versionado como exemplo, mas se você não quiser, descomente)
+# Settings.txt
