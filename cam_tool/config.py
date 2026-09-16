@@ -58,10 +58,22 @@ class Parametro:
 # ---------------------------------------------------------------------------
 # Tabela de parâmetros do programa
 # ---------------------------------------------------------------------------
-# Esta tabela é a ÚNICA fonte de verdade sobre os parâmetros.
 
 PARAMETROS: Dict[str, Parametro] = {
-    # --- Arquivo de vídeo ---
+    # --- Entrada: pasta de imagens ---
+    "pasta_imagens": Parametro(
+        chave="pasta_imagens",
+        padrao="",
+        tipo=str,
+        descricao="Caminho da pasta com imagens a processar",
+    ),
+    "recursivo": Parametro(
+        chave="recursivo",
+        padrao=False, tipo=bool,
+        descricao="Processar subpastas recursivamente",
+    ),
+
+    # --- Entrada: vídeo (legado, mantido para uso futuro) ---
     "video_file_path": Parametro(
         chave="video_file_path",
         padrao="",
@@ -205,8 +217,13 @@ PARAMETROS: Dict[str, Parametro] = {
         padrao=3.0, tipo=float, minimo=0.1, maximo=50.0,
         descricao="Distância máxima (px) para considerar contato com a baseline",
     ),
+    "inverter_segmentacao": Parametro(
+        chave="inverter_segmentacao",
+        padrao=True, tipo=bool,
+        descricao="Inverter a imagem antes do threshold (gota escura sobre fundo claro)",
+    ),
 
-    # --- Zoom ---
+    # --- Zoom (não usado na GUI atual, mantido para compatibilidade) ---
     "zoom_x": Parametro(
         chave="zoom_x",
         padrao=352, tipo=int, minimo=0, maximo=100000,
@@ -223,7 +240,7 @@ PARAMETROS: Dict[str, Parametro] = {
         descricao="Tamanho (lado) da caixa de zoom",
     ),
 
-    # --- Compilação do slideshow ---
+    # --- Compilação do slideshow (legado) ---
     "img_duration": Parametro(
         chave="img_duration",
         padrao=0.5, tipo=float, minimo=0.1, maximo=5.0,
@@ -312,11 +329,7 @@ class ConfigManager:
     # ------------------------------------------------------------------
 
     def registrar_callback(self, callback: Callable[[str, Any], None]) -> None:
-        """
-        Registra uma função para ser chamada quando um valor mudar.
-
-        A função recebe (chave, novo_valor).
-        """
+        """Registra uma função para ser chamada quando um valor mudar."""
         self._callbacks.append(callback)
 
     def _notificar(self, chave: str, valor: Any) -> None:
@@ -332,7 +345,7 @@ class ConfigManager:
 
     @staticmethod
     def _validar_tipo(valor: Any, param: Parametro) -> bool:
-        """Verifica se o valor é do tipo esperado (com tolerância para int/float)."""
+        """Verifica se o valor é do tipo esperado."""
         if param.tipo is bool:
             return isinstance(valor, bool)
         if param.tipo is int:
@@ -399,14 +412,15 @@ class ConfigManager:
                 f.write("# Linhas começando com # são ignoradas\n\n")
 
                 grupos = {
-                    "Vídeo": ["video_file_path", "video_file_name"],
+                    "Entrada": ["pasta_imagens", "recursivo"],
+                    "Vídeo (legado)": ["video_file_path", "video_file_name"],
                     "Calibração": ["escala_nm_por_px", "unidade_saida"],
                     "Fontes": [k for k in PARAMETROS if "font" in k or "offset" in k],
                     "Cores": [k for k in PARAMETROS if any(p in k for p in ("_r", "_g", "_b", "draw_"))],
                     "Coleta": ["num_images", "time_increment", "start_time", "roi_x1", "roi_x2"],
-                    "Análise": ["baseline_threshold", "tolerancia_contato_px"],
-                    "Zoom": ["zoom_x", "zoom_y", "zoom_size"],
-                    "Compilação": ["img_duration", "output_format", "txt_suffix"],
+                    "Análise": ["baseline_threshold", "tolerancia_contato_px", "inverter_segmentacao"],
+                    "Zoom (legado)": ["zoom_x", "zoom_y", "zoom_size"],
+                    "Compilação (legado)": ["img_duration", "output_format", "txt_suffix"],
                 }
 
                 vistos = set()
@@ -431,11 +445,7 @@ class ConfigManager:
             log.error(f"Falha ao salvar configurações: {e}")
 
     def resetar(self) -> None:
-        """
-        Restaura todos os parâmetros para os valores padrão.
-
-        Notifica todos os callbacks, mesmo os que já estavam no padrão.
-        """
+        """Restaura todos os parâmetros para os valores padrão."""
         for chave, param in PARAMETROS.items():
             self._valores[chave] = param.padrao
             self._notificar(chave, param.padrao)
