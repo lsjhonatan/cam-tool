@@ -5,19 +5,14 @@ Orquestra todas as etapas da análise de uma gota:
     1. Segmentação
     2. Extração de contorno
     3. Ajuste de baseline
-    4. Ajuste de elipse
+    4. Ajuste de elipse (validada contra a baseline)
     5. Cálculo de ângulos
     6. Renderização do overlay
-
-A classe DropletAnalyzer encapsula o pipeline e devolve um
-ResultadoAnalise com tudo que foi calculado.
 
 Uso típico:
     from cam_tool.pipeline import DropletAnalyzer, ParametrosAnalise
     analyzer = DropletAnalyzer(ParametrosAnalise(roi_x1=750, roi_x2=1700))
     resultado = analyzer.analisar(frame)
-    resultado.angulos.esquerdo
-    resultado.imagem_anotada
 """
 
 from __future__ import annotations
@@ -44,28 +39,13 @@ log = get_logger()
 
 @dataclass
 class ParametrosAnalise:
-    """
-    Reúne todos os parâmetros que o pipeline precisa.
-
-    Pode ser construído a partir de um ConfigManager com
-    ParametrosAnalise.de_config(cfg).
-
-    Atributos:
-        roi_x1, roi_x2:        limites horizontais da região de interesse
-        baseline_threshold:    % dos pontos mais baixos usados na baseline
-        droplet_threshold:     % dos pontos mais altos usados na elipse
-        tolerancia_contato_px: tolerância (px) para considerar ponto de contato
-        passo_varredura_graus: incremento do theta ao varrer a elipse
-        kernel_blur:           tamanho do kernel do desfoque gaussiano
-        kernel_morph_open:     kernel da abertura morfológica
-        kernel_morph_close:    kernel do fechamento morfológico
-        estilo:                estilo do overlay (cores, fontes, etc.)
-    """
+    """Reúne todos os parâmetros que o pipeline precisa."""
     roi_x1: int = 750
     roi_x2: int = 1700
     baseline_threshold: float = 15.0
     droplet_threshold: float = 50.0
     tolerancia_contato_px: float = 2.0
+    tolerancia_baseline_elipse_px: float = 50.0
     passo_varredura_graus: float = 1.0
     kernel_blur: int = 7
     kernel_morph_open: int = 5
@@ -74,12 +54,7 @@ class ParametrosAnalise:
 
     @classmethod
     def de_config(cls, cfg) -> "ParametrosAnalise":
-        """
-        Constrói um ParametrosAnalise a partir de um ConfigManager.
-
-        Lê os parâmetros do ConfigManager e monta o dataclass,
-        incluindo o EstiloOverlay com as cores configuradas.
-        """
+        """Constrói um ParametrosAnalise a partir de um ConfigManager."""
         estilo = EstiloOverlay(
             roi_cor=(cfg.obter("region_b"), cfg.obter("region_g"), cfg.obter("region_r")),
             roi_desenhar=cfg.obter("draw_region"),
@@ -141,18 +116,7 @@ class ParametrosAnalise:
 
 @dataclass
 class ResultadoAnalise:
-    """
-    Resultado completo de uma análise de gota.
-
-    Atributos:
-        angulos:          ângulos calculados (esquerdo, direito, média)
-        contorno:         contorno extraído
-        baseline:         linha de base ajustada
-        elipse:           elipse ajustada
-        imagem_anotada:   imagem com overlay desenhado
-        sucesso:          True se todas as etapas foram concluídas
-        erro:             mensagem de erro, se houver
-    """
+    """Resultado completo de uma análise de gota."""
     angulos: Optional[AngulosContato] = None
     contorno: Optional[ResultadoContorno] = None
     baseline: Optional[LinhaBase] = None
@@ -179,20 +143,11 @@ class ResultadoAnalise:
 # ---------------------------------------------------------------------------
 
 class DropletAnalyzer:
-    """
-    Orquestra o pipeline de análise de uma gota.
-
-    Exemplo:
-        analyzer = DropletAnalyzer(ParametrosAnalise(roi_x1=750, roi_x2=1700))
-        resultado = analyzer.analisar(frame, texto_tempo="0 s")
-        if resultado.sucesso:
-            print(resultado.angulo_esquerdo, resultado.angulo_direito)
-    """
+    """Orquestra o pipeline de análise de uma gota."""
 
     def __init__(self, parametros: Optional[ParametrosAnalise] = None):
         self.parametros = parametros or ParametrosAnalise()
 
-        # Componentes do pipeline (criados uma vez, reutilizados)
         self._segmenter = Segmenter(ParametrosSegmentacao(
             roi_x1=self.parametros.roi_x1,
             roi_x2=self.parametros.roi_x2,
@@ -212,25 +167,14 @@ class DropletAnalyzer:
         )
         self._overlay_renderer = OverlayRenderer(self.parametros.estilo)
 
-    # ------------------------------------------------------------------
-    # Análise
-    # ------------------------------------------------------------------
-
     def analisar(
         self,
         imagem: np.ndarray,
         texto_tempo: Optional[str] = None,
     ) -> ResultadoAnalise:
-        """
-        Executa o pipeline completo em uma imagem.
-
-        Retorna ResultadoAnalise com tudo preenchido (ou com erro).
-        """
+        """Executa o pipeline completo em uma imagem."""
         if imagem is None or imagem.size == 0:
-            return ResultadoAnalise(
-                sucesso=False,
-                erro="Imagem vazia ou inválida",
-            )
+            return ResultadoAnalise(sucesso=False, erro="Imagem vazia ou inválida")
 
         try:
             # 1. Segmentação
@@ -247,7 +191,7 @@ class DropletAnalyzer:
                     erro="Contorno não encontrado",
                 )
 
-            # 3. Baseline
+            # 3. Baseline PRIMEIRO
             baseline = self._baseline_fitter.ajustar(
                 contorno.pontos,
                 percentual_baixos=self.parametros.baseline_threshold,
@@ -259,10 +203,13 @@ class DropletAnalyzer:
                     erro="Ajuste de baseline falhou",
                 )
 
-            # 4. Elipse
+            # 4. Elipse, VALIDADA contra a baseline
             elipse = self._ellipse_fitter.ajustar(
                 contorno.pontos,
                 percentual_altos=self.parametros.droplet_threshold,
+                imagem_forma=imagem.shape[:2],
+                baseline=baseline,
+                tolerancia_baseline=self.parametros.tolerancia_baseline_elipse_px,
             )
             if elipse is None:
                 return ResultadoAnalise(
@@ -319,10 +266,5 @@ def analisar_frame(
     parametros: Optional[ParametrosAnalise] = None,
     texto_tempo: Optional[str] = None,
 ) -> ResultadoAnalise:
-    """
-    Atalho funcional: cria um DropletAnalyzer e analisa um frame.
-
-    Útil para scripts rápidos, mas menos eficiente do que reutilizar
-    o mesmo analyzer para vários frames.
-    """
+    """Atalho funcional."""
     return DropletAnalyzer(parametros).analisar(imagem, texto_tempo=texto_tempo)
