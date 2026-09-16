@@ -4,14 +4,14 @@ Módulo de segmentação do cam-tool.
 Responsável por isolar a gota do fundo, aplicando:
 - Conversão para escala de cinza
 - Desfoque gaussiano (reduz ruído)
-- Inversão (gota escura vira clara)
+- Inversão opcional (gota escura → clara)
 - Binarização por Otsu (threshold automático)
 - Operações morfológicas (abrir/fechar)
 - Aplicação de máscara na região de interesse (ROI)
 
 Uso típico:
     from cam_tool.segmentation import Segmenter, ParametrosSegmentacao
-    seg = Segmenter(ParametrosSegmentacao(roi_x1=750, roi_x2=1700))
+    seg = Segmenter(ParametrosSegmentacao(roi_x1=0, roi_x2=422))
     mascara = seg.processar(frame)
 """
 
@@ -42,12 +42,16 @@ class ParametrosSegmentacao:
         kernel_blur:        tamanho do kernel do desfoque gaussiano (ímpar)
         kernel_morph_open:  tamanho do kernel da abertura morfológica
         kernel_morph_close: tamanho do kernel do fechamento morfológico
+        inverter:           se True, inverte a imagem antes do threshold.
+                            Use True para gota escura sobre fundo claro.
+                            Use False para gota clara sobre fundo escuro.
     """
     roi_x1: int = 750
     roi_x2: int = 1700
     kernel_blur: int = 7
     kernel_morph_open: int = 5
     kernel_morph_close: int = 9
+    inverter: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -61,14 +65,14 @@ class Segmenter:
     Pipeline:
         1. Converte para escala de cinza
         2. Aplica blur gaussiano
-        3. Inverte (gota escura → clara)
+        3. (Opcional) Inverte
         4. Binariza com Otsu
         5. Abre (remove ruído pequeno)
         6. Fecha (preenche buracos)
         7. Zera tudo fora da ROI
 
     Exemplo:
-        seg = Segmenter(ParametrosSegmentacao(roi_x1=750, roi_x2=1700))
+        seg = Segmenter(ParametrosSegmentacao(roi_x1=0, roi_x2=422, inverter=False))
         mascara = seg.processar(frame)
     """
 
@@ -95,12 +99,15 @@ class Segmenter:
         kernel_b = p.kernel_blur if p.kernel_blur % 2 == 1 else p.kernel_blur + 1
         blur = cv2.GaussianBlur(cinza, (kernel_b, kernel_b), 0)
 
-        # 3. Inversão (gota escura vira clara)
-        invertida = cv2.bitwise_not(blur)
+        # 3. Inversão (opcional)
+        if p.inverter:
+            imagem_proc = cv2.bitwise_not(blur)
+        else:
+            imagem_proc = blur
 
         # 4. Binarização por Otsu
         _, mascara = cv2.threshold(
-            invertida, 0, 255,
+            imagem_proc, 0, 255,
             cv2.THRESH_BINARY + cv2.THRESH_OTSU
         )
 
@@ -137,11 +144,10 @@ def segmentar(
     kernel_blur: int = 7,
     kernel_morph_open: int = 5,
     kernel_morph_close: int = 9,
+    inverter: bool = True,
 ) -> np.ndarray:
     """
     Atalho funcional para segmentar uma imagem sem instanciar Segmenter.
-
-    Útil para testes rápidos.
     """
     params = ParametrosSegmentacao(
         roi_x1=roi_x1,
@@ -149,5 +155,6 @@ def segmentar(
         kernel_blur=kernel_blur,
         kernel_morph_open=kernel_morph_open,
         kernel_morph_close=kernel_morph_close,
+        inverter=inverter,
     )
     return Segmenter(params).processar(imagem_bgr)

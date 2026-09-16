@@ -10,7 +10,7 @@ Orquestra todas as etapas da análise de uma gota:
 
 Uso típico:
     from cam_tool.pipeline import DropletAnalyzer, ParametrosAnalise
-    analyzer = DropletAnalyzer(ParametrosAnalise(roi_x1=750, roi_x2=1700))
+    analyzer = DropletAnalyzer(ParametrosAnalise(roi_x1=0, roi_x2=422))
     resultado = analyzer.analisar(frame)
     resultado.medidas.largura_nm
 """
@@ -45,6 +45,7 @@ class ParametrosAnalise:
     tolerancia_contato_px: float = 3.0
     escala_nm_por_px: float = 1.0
     unidade_saida: str = "nm"
+    inverter_segmentacao: bool = True
     kernel_blur: int = 7
     kernel_morph_open: int = 5
     kernel_morph_close: int = 9
@@ -100,6 +101,7 @@ class ParametrosAnalise:
             tolerancia_contato_px=cfg.obter("tolerancia_contato_px"),
             escala_nm_por_px=cfg.obter("escala_nm_por_px"),
             unidade_saida=cfg.obter("unidade_saida"),
+            inverter_segmentacao=cfg.obter("inverter_segmentacao"),
             estilo=estilo,
         )
 
@@ -118,7 +120,6 @@ class ResultadoAnalise:
     sucesso: bool = False
     erro: Optional[str] = None
 
-    # Atalhos convenientes
     @property
     def largura_nm(self) -> Optional[float]:
         return self.medidas.largura_nm if self.medidas else None
@@ -152,6 +153,7 @@ class DropletAnalyzer:
             kernel_blur=self.parametros.kernel_blur,
             kernel_morph_open=self.parametros.kernel_morph_open,
             kernel_morph_close=self.parametros.kernel_morph_close,
+            inverter=self.parametros.inverter_segmentacao,
         ))
         self._extrator_contorno = ContourExtractor(
             roi_x1=self.parametros.roi_x1,

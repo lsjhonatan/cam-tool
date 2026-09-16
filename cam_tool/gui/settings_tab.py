@@ -1,16 +1,16 @@
 """
 Aba de configurações da GUI do cam-tool.
 
-Contém todos os controles da aplicação:
-- Seleção de vídeo
+Modo atual: processamento em lote de imagens de uma pasta.
+
+Contém:
+- Seleção de pasta de imagens
 - Calibração (escala nm/px, unidade)
 - Configurações de fonte
 - Tabela de cores
-- Configurações de coleta (num_images, ROI, etc.)
-- Configurações de compilação (formato, duração)
 - Thresholds de análise
-- Preview da imagem analisada
-- Botões de ação (Save/Load/Reset Settings, Atualizar Preview, Compile)
+- Preview da primeira imagem analisada
+- Botões de ação (Processar pasta, Save/Load/Reset)
 
 Uso típico:
     from cam_tool.gui.settings_tab import SettingsTab
@@ -20,19 +20,18 @@ Uso típico:
 
 from __future__ import annotations
 
-import os
 import time
 from datetime import datetime
 from pathlib import Path
 from tkinter import Tk, filedialog
-from typing import Optional
+from typing import List, Optional
 
 import cv2
 import dearpygui.dearpygui as dpg
 import numpy as np
 
 from cam_tool.config import ConfigManager
-from cam_tool.export import Medicao, exportar_csv, exportar_xlsx, gerar_nome_planilha
+from cam_tool.export import Medicao, exportar_xlsx, gerar_nome_planilha
 from cam_tool.gui.preview import PreviewWidget
 from cam_tool.gui.widgets import (
     atualizar_preview_cor,
@@ -40,10 +39,9 @@ from cam_tool.gui.widgets import (
     input_float_com_clamp,
     input_int_com_clamp,
 )
+from cam_tool.image import ImageLoader, ImageWriter
 from cam_tool.log import get_logger
 from cam_tool.pipeline import DropletAnalyzer, ParametrosAnalise
-from cam_tool.slideshow import construir_slideshow
-from cam_tool.video import VideoReader, formatar_tempo
 
 log = get_logger()
 
@@ -53,9 +51,11 @@ log = get_logger()
 # ---------------------------------------------------------------------------
 
 TAG_TAB = "settings_tab"
-TAG_VIDEO_NAME = "video_file_name"
-TAG_VIDEO_PATH = "video_file_path"
+TAG_PASTA = "pasta_imagens"
 TAG_STATUS = "status_text"
+
+# Extensões suportadas
+EXTENSOES_IMAGEM = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 
 
 # ---------------------------------------------------------------------------
@@ -64,11 +64,10 @@ TAG_STATUS = "status_text"
 
 class SettingsTab:
     """
-    Aba principal de configurações.
+    Aba principal de configurações (modo lote de imagens).
 
     Recebe o ConfigManager e o DropletAnalyzer do App. Cria todos
-    os widgets, registra callbacks, e implementa as ações
-    (atualizar preview, compilar slideshow, salvar/carregar config).
+    os widgets, registra callbacks, e implementa as ações.
     """
 
     def __init__(self, config: ConfigManager, analyzer: DropletAnalyzer):
@@ -77,7 +76,7 @@ class SettingsTab:
         self.preview = PreviewWidget()
 
         self._ultima_imagem_anotada: Optional[np.ndarray] = None
-        self._ultimo_frame: Optional[np.ndarray] = None
+        self._primeira_imagem: Optional[np.ndarray] = None
 
     # ------------------------------------------------------------------
     # Criação
@@ -86,7 +85,7 @@ class SettingsTab:
     def criar(self) -> None:
         """Cria a aba dentro do tab_bar atual."""
         with dpg.tab(label="Settings", tag=TAG_TAB):
-            self._secao_video()
+            self._secao_pasta()
             dpg.add_separator()
             self._secao_calibracao()
             dpg.add_separator()
@@ -94,43 +93,37 @@ class SettingsTab:
             dpg.add_separator()
             self._secao_cores()
             dpg.add_separator()
-            self._secao_coleta()
-            dpg.add_separator()
-            self._secao_compilacao()
-            dpg.add_separator()
             self._secao_analise()
             dpg.add_separator()
             self._secao_preview()
             dpg.add_separator()
             self._secao_acoes()
 
-        # Registra callback no config pra reconstruir analyzer quando params mudam
         self.config.registrar_callback(self._on_config_changed)
-
         log.debug("SettingsTab criado")
 
     # ------------------------------------------------------------------
     # Seções
     # ------------------------------------------------------------------
 
-    def _secao_video(self) -> None:
-        dpg.add_text("Arquivo de Vídeo:")
+    def _secao_pasta(self) -> None:
+        dpg.add_text("Pasta de Imagens:")
         with dpg.table(header_row=True, width=770, policy=dpg.mvTable_SizingStretchProp):
-            dpg.add_table_column(label="Vídeo")
-            dpg.add_table_column(label="Caminho")
+            dpg.add_table_column(label="Pasta")
+            dpg.add_table_column(label="Nº de imagens")
             dpg.add_table_column(label="Ação")
             with dpg.table_row():
                 dpg.add_input_text(
-                    tag=TAG_VIDEO_NAME, readonly=True, width=180,
+                    tag=TAG_PASTA, readonly=True, width=470,
                     default_value="",
                 )
                 dpg.add_input_text(
-                    tag=TAG_VIDEO_PATH, readonly=True, width=470,
-                    default_value="",
+                    tag="contagem_imagens", readonly=True, width=100,
+                    default_value="0",
                 )
                 dpg.add_button(
-                    label="Selecionar vídeo",
-                    callback=self._escolher_video,
+                    label="Selecionar pasta",
+                    callback=self._escolher_pasta,
                 )
 
     def _secao_calibracao(self) -> None:
@@ -154,18 +147,6 @@ class SettingsTab:
         with dpg.group(horizontal=True):
             with dpg.group():
                 input_int_com_clamp(
-                    label="Tempo (tamanho)", tag="label_font_size",
-                    default_value=20, min_value=1, max_value=100,
-                    callback=self._on_param_changed,
-                )
-                input_int_com_clamp(
-                    label="Tempo (espessura)", tag="label_font_thickness",
-                    default_value=0, min_value=0, max_value=10,
-                    callback=self._on_param_changed,
-                )
-            dpg.add_spacer(width=20)
-            with dpg.group():
-                input_int_com_clamp(
                     label="Medidas (tamanho)", tag="measure_font_size",
                     default_value=22, min_value=1, max_value=100,
                     callback=self._on_param_changed,
@@ -173,6 +154,18 @@ class SettingsTab:
                 input_int_com_clamp(
                     label="Medidas (espessura)", tag="measure_font_thickness",
                     default_value=1, min_value=0, max_value=10,
+                    callback=self._on_param_changed,
+                )
+            dpg.add_spacer(width=20)
+            with dpg.group():
+                input_int_com_clamp(
+                    label="Offset X", tag="measure_offset_x",
+                    default_value=0, min_value=-2000, max_value=2000,
+                    callback=self._on_param_changed,
+                )
+                input_int_com_clamp(
+                    label="Offset Y", tag="measure_offset_y",
+                    default_value=0, min_value=-2000, max_value=2000,
                     callback=self._on_param_changed,
                 )
 
@@ -192,7 +185,6 @@ class SettingsTab:
             dpg.add_table_column(label="Cor")
             dpg.add_table_column(label="Desenhar")
 
-            # Linha 1: ROI
             color_picker_row(
                 label="Região de Interesse",
                 r_tag="region_r", g_tag="region_g", b_tag="region_b",
@@ -200,7 +192,6 @@ class SettingsTab:
                 default_color=(255, 125, 0), default_draw=True,
                 callback=self._on_cor_changed,
             )
-            # Linha 2: Contorno
             color_picker_row(
                 label="Contorno",
                 r_tag="contour_r", g_tag="contour_g", b_tag="contour_b",
@@ -208,7 +199,6 @@ class SettingsTab:
                 default_color=(255, 255, 0), default_draw=True,
                 callback=self._on_cor_changed,
             )
-            # Linha 3: Baseline
             color_picker_row(
                 label="Baseline",
                 r_tag="baseline_r", g_tag="baseline_g", b_tag="baseline_b",
@@ -216,7 +206,6 @@ class SettingsTab:
                 default_color=(255, 0, 0), default_draw=True,
                 callback=self._on_cor_changed,
             )
-            # Linha 4: Linhas de dimensão
             color_picker_row(
                 label="Linhas de Dimensão",
                 r_tag="dimension_line_r", g_tag="dimension_line_g", b_tag="dimension_line_b",
@@ -224,7 +213,6 @@ class SettingsTab:
                 default_color=(0, 0, 0), default_draw=True,
                 callback=self._on_cor_changed,
             )
-            # Linha 5: Medidas
             color_picker_row(
                 label="Medidas",
                 r_tag="measure_r", g_tag="measure_g", b_tag="measure_b",
@@ -232,7 +220,6 @@ class SettingsTab:
                 default_color=(0, 0, 0), default_draw=True,
                 callback=self._on_cor_changed,
             )
-            # Linha 6: Texto de tempo
             color_picker_row(
                 label="Texto de Tempo",
                 r_tag="label_text_r", g_tag="label_text_g", b_tag="label_text_b",
@@ -240,69 +227,12 @@ class SettingsTab:
                 default_color=(0, 0, 0), default_draw=True,
                 callback=self._on_cor_changed,
             )
-            # Linha 7: Fundo do rótulo
             color_picker_row(
                 label="Fundo do Rótulo",
                 r_tag="label_background_r", g_tag="label_background_g", b_tag="label_background_b",
                 draw_tag="draw_label_background", preview_tag="preview_label_bg",
                 default_color=(255, 255, 255), default_draw=True,
                 callback=self._on_cor_changed,
-            )
-
-    def _secao_coleta(self) -> None:
-        dpg.add_text("Coleta de imagens:")
-        with dpg.group(horizontal=True):
-            with dpg.group():
-                input_int_com_clamp(
-                    label="Número de imagens", tag="num_images",
-                    default_value=10, min_value=1, max_value=10000,
-                    callback=self._on_param_changed,
-                )
-                input_float_com_clamp(
-                    label="Intervalo (s)", tag="time_increment",
-                    default_value=1.0, min_value=0.001, max_value=3600.0,
-                    step=0.1, step_fast=1.0, format="%.2f",
-                    callback=self._on_param_changed,
-                )
-                input_float_com_clamp(
-                    label="Tempo inicial (s)", tag="start_time",
-                    default_value=8.0, min_value=0.0, max_value=100000.0,
-                    step=0.1, step_fast=1.0, format="%.2f",
-                    callback=self._on_param_changed,
-                )
-            dpg.add_spacer(width=20)
-            with dpg.group():
-                input_int_com_clamp(
-                    label="ROI x1", tag="roi_x1",
-                    default_value=750, min_value=0, max_value=100000,
-                    callback=self._on_param_changed,
-                )
-                input_int_com_clamp(
-                    label="ROI x2", tag="roi_x2",
-                    default_value=1700, min_value=1, max_value=100000,
-                    callback=self._on_param_changed,
-                )
-
-    def _secao_compilacao(self) -> None:
-        dpg.add_text("Compilação:")
-        with dpg.group(horizontal=True):
-            input_float_com_clamp(
-                label="Duração por imagem (s)", tag="img_duration",
-                default_value=0.5, min_value=0.1, max_value=5.0,
-                step=0.1, step_fast=0.5, format="%.1f",
-                callback=self._on_param_changed,
-            )
-            dpg.add_spacer(width=10)
-            dpg.add_combo(
-                label="Formato", tag="output_format",
-                items=["GIF", "MP4"], default_value="GIF", width=100,
-                callback=self._on_param_changed,
-            )
-            dpg.add_spacer(width=10)
-            dpg.add_input_text(
-                label="Sufixo de tempo", tag="txt_suffix",
-                default_value="s", width=80,
-                callback=self._on_param_changed,
             )
 
     def _secao_analise(self) -> None:
@@ -321,9 +251,16 @@ class SettingsTab:
                 step=0.1, step_fast=1.0, format="%.1f",
                 callback=self._on_param_changed,
             )
+            dpg.add_spacer(width=10)
+            dpg.add_checkbox(
+                label="Inverter segmentação",
+                tag="inverter_segmentacao",
+                default_value=True,
+                callback=self._on_param_changed,
+            )
 
     def _secao_preview(self) -> None:
-        dpg.add_text("Preview:")
+        dpg.add_text("Preview (primeira imagem da pasta):")
         self.preview.criar()
 
     def _secao_acoes(self) -> None:
@@ -334,8 +271,8 @@ class SettingsTab:
                 width=160,
             )
             dpg.add_button(
-                label="Compilar Slideshow",
-                callback=self._compilar_slideshow,
+                label="Processar pasta",
+                callback=self._processar_pasta,
                 width=180,
             )
         with dpg.group(horizontal=True):
@@ -351,39 +288,23 @@ class SettingsTab:
     # ------------------------------------------------------------------
 
     def _on_param_changed(self, sender=None, app_data=None, user_data=None) -> None:
-        """
-        Chamado quando um parâmetro numérico muda.
-
-        Sincroniza o valor do widget com o ConfigManager.
-        """
         if sender is None:
             return
-
-        tag = sender
         try:
-            valor = dpg.get_value(tag)
-            self.config.definir(tag, valor)
+            valor = dpg.get_value(sender)
+            self.config.definir(sender, valor)
         except Exception as e:
-            log.warning(f"Falha ao sincronizar {tag}: {e}")
+            log.warning(f"Falha ao sincronizar {sender}: {e}")
 
     def _on_cor_changed(self, sender=None, app_data=None, user_data=None) -> None:
-        """
-        Chamado quando uma cor ou checkbox "draw" muda.
-
-        Atualiza o preview visual da cor e sincroniza com o ConfigManager.
-        """
         if sender is None:
             return
-
-        # Atualiza preview visual da cor
         if user_data is not None and isinstance(user_data, tuple):
             try:
                 r_tag, g_tag, b_tag, preview_tag = user_data
                 atualizar_preview_cor(r_tag, g_tag, b_tag, preview_tag)
             except Exception as e:
                 log.warning(f"Falha ao atualizar preview da cor: {e}")
-
-        # Sincroniza valor com o config
         try:
             valor = dpg.get_value(sender)
             self.config.definir(sender, valor)
@@ -391,25 +312,18 @@ class SettingsTab:
             log.warning(f"Falha ao sincronizar cor {sender}: {e}")
 
     def _on_config_changed(self, chave: str, valor) -> None:
-        """
-        Chamado quando um valor do config muda.
-
-        Reconstrói o analyzer se algum parâmetro de análise mudou.
-        """
-        # Parâmetros que afetam a análise
         params_analise = {
             "roi_x1", "roi_x2", "baseline_threshold", "tolerancia_contato_px",
-            "escala_nm_por_px", "unidade_saida",
+            "escala_nm_por_px", "unidade_saida", "inverter_segmentacao",
         }
         if chave in params_analise:
             self._reconstruir_analyzer()
 
     def _reconstruir_analyzer(self) -> None:
-        """Recria o DropletAnalyzer com os parâmetros atuais do config."""
         try:
             params = ParametrosAnalise.de_config(self.config)
             self.analyzer = DropletAnalyzer(params)
-            log.debug("Analyzer reconstruído com novos parâmetros")
+            log.debug("Analyzer reconstruído")
         except Exception as e:
             log.error(f"Falha ao reconstruir analyzer: {e}")
 
@@ -417,184 +331,184 @@ class SettingsTab:
     # Ações
     # ------------------------------------------------------------------
 
-    def _escolher_video(self) -> None:
-        """Abre diálogo pra escolher um vídeo."""
+    def _escolher_pasta(self) -> None:
+        """Abre diálogo pra escolher uma pasta de imagens."""
         root = Tk()
         root.withdraw()
 
-        # Diretório inicial
-        caminho_atual = self.config.obter("video_file_path")
-        if caminho_atual and Path(caminho_atual).is_file():
-            initialdir = str(Path(caminho_atual).parent)
+        pasta_atual = self.config.obter("pasta_imagens")
+        if pasta_atual and Path(pasta_atual).is_dir():
+            initialdir = pasta_atual
         else:
             initialdir = str(Path.home())
 
-        caminho = filedialog.askopenfilename(
-            title="Selecione um vídeo",
+        pasta = filedialog.askdirectory(
+            title="Selecione a pasta com imagens",
             initialdir=initialdir,
-            filetypes=[
-                ("Vídeos", "*.mp4 *.avi *.mov *.mkv"),
-                ("Todos os arquivos", "*.*"),
-            ],
         )
         root.destroy()
 
-        if not caminho:
+        if not pasta:
             return
 
-        # Atualiza config
-        self.config.definir("video_file_path", caminho)
-        self.config.definir("video_file_name", Path(caminho).name)
+        pasta = str(Path(pasta).resolve())
+        self.config.definir("pasta_imagens", pasta)
 
-        # Atualiza UI
-        if dpg.does_item_exist(TAG_VIDEO_PATH):
-            dpg.set_value(TAG_VIDEO_PATH, caminho)
-        if dpg.does_item_exist(TAG_VIDEO_NAME):
-            dpg.set_value(TAG_VIDEO_NAME, Path(caminho).name)
+        # Conta imagens
+        imagens = self._listar_imagens(Path(pasta))
+        if dpg.does_item_exist(TAG_PASTA):
+            dpg.set_value(TAG_PASTA, pasta)
+        if dpg.does_item_exist("contagem_imagens"):
+            dpg.set_value("contagem_imagens", str(len(imagens)))
 
-        self._set_status(f"Vídeo carregado: {Path(caminho).name}")
-        log.info(f"Vídeo selecionado: {caminho}")
+        log.info(f"Pasta selecionada: {pasta} ({len(imagens)} imagens)")
+        self._set_status(f"{len(imagens)} imagens encontradas.")
 
-        # Atualiza preview automaticamente
+        # Atualiza preview
         self._atualizar_preview()
 
+    def _listar_imagens(self, pasta: Path) -> List[Path]:
+        """Retorna lista de imagens na pasta (não recursivo), ordenada por nome."""
+        if not pasta.is_dir():
+            return []
+        imagens = [
+            p for p in sorted(pasta.iterdir())
+            if p.is_file() and p.suffix.lower() in EXTENSOES_IMAGEM
+        ]
+        return imagens
+
     def _atualizar_preview(self) -> None:
-        """Lê um frame do vídeo, analisa, e mostra no preview."""
-        caminho = self.config.obter("video_file_path")
-        if not caminho or not Path(caminho).is_file():
-            self._set_status("Selecione um vídeo primeiro.")
+        """Lê a primeira imagem da pasta, analisa, e mostra no preview."""
+        pasta = self.config.obter("pasta_imagens")
+        if not pasta or not Path(pasta).is_dir():
+            self._set_status("Selecione uma pasta primeiro.")
+            return
+
+        imagens = self._listar_imagens(Path(pasta))
+        if not imagens:
+            self._set_status("Nenhuma imagem encontrada na pasta.")
+            self.preview.limpar()
             return
 
         try:
-            with VideoReader(Path(caminho)) as video:
-                # Frame no tempo inicial
-                tempo = self.config.obter("start_time")
-                if tempo > video.duracao:
-                    tempo = 0.0
+            primeira = imagens[0]
+            frame = ImageLoader.carregar(primeira)
+            if frame is None:
+                self._set_status(f"Falha ao carregar: {primeira.name}")
+                return
 
-                frame = video.ler_frame_em(tempo)
-                if frame is None:
-                    self._set_status("Não foi possível ler o frame.")
-                    return
+            self._primeira_imagem = frame
 
-                self._ultimo_frame = frame
+            resultado = self.analyzer.analisar(frame, texto_tempo=None)
 
-                # Analisa
-                texto_tempo = f"{tempo:.0f} {self.config.obter('txt_suffix')}"
-                resultado = self.analyzer.analisar(frame, texto_tempo=texto_tempo)
+            if not resultado.sucesso:
+                self._set_status(f"Análise falhou: {resultado.erro}")
+                self.preview.atualizar(frame)
+                return
 
-                if not resultado.sucesso:
-                    self._set_status(f"Análise falhou: {resultado.erro}")
-                    self.preview.atualizar(frame)
-                    return
+            self._ultima_imagem_anotada = resultado.imagem_anotada
+            self.preview.atualizar(resultado.imagem_anotada)
 
-                self._ultima_imagem_anotada = resultado.imagem_anotada
-                self.preview.atualizar(resultado.imagem_anotada)
-
-                self._set_status(
-                    f"Preview atualizado: "
-                    f"L={resultado.largura_nm:.0f}nm "
-                    f"H={resultado.altura_nm:.0f}nm "
-                    f"R={resultado.raio_nm:.0f}nm "
-                    f"θ={resultado.angulo_graus:.1f}°"
-                )
-                log.info(
-                    f"Preview: L={resultado.largura_nm:.0f}nm, "
-                    f"H={resultado.altura_nm:.0f}nm, "
-                    f"R={resultado.raio_nm:.0f}nm, "
-                    f"θ={resultado.angulo_graus:.1f}°"
-                )
+            self._set_status(
+                f"Preview: {primeira.name} — "
+                f"L={resultado.largura_nm:.0f} "
+                f"H={resultado.altura_nm:.0f} "
+                f"R={resultado.raio_nm:.0f} "
+                f"θ={resultado.angulo_graus:.1f}°"
+            )
+            log.info(
+                f"Preview {primeira.name}: L={resultado.largura_nm:.0f}, "
+                f"H={resultado.altura_nm:.0f}, R={resultado.raio_nm:.0f}, "
+                f"θ={resultado.angulo_graus:.1f}°"
+            )
 
         except Exception as e:
             log.error(f"Erro no preview: {e}")
             self._set_status(f"Erro: {e}")
 
-    def _compilar_slideshow(self) -> None:
-        """Processa vários frames, gera imagens + slideshow + planilha."""
-        caminho = self.config.obter("video_file_path")
-        if not caminho or not Path(caminho).is_file():
-            self._set_status("Selecione um vídeo primeiro.")
+    def _processar_pasta(self) -> None:
+        """
+        Processa todas as imagens da pasta.
+
+        Para cada imagem: analisa, salva PNG anotado.
+        No final: gera 1 XLSX com todas as medições.
+        """
+        pasta = self.config.obter("pasta_imagens")
+        if not pasta or not Path(pasta).is_dir():
+            self._set_status("Selecione uma pasta primeiro.")
+            return
+
+        imagens = self._listar_imagens(Path(pasta))
+        if not imagens:
+            self._set_status("Nenhuma imagem encontrada.")
             return
 
         try:
-            self._set_status("Processando...")
-            log.info("Iniciando compilação do slideshow...")
-
-            num_images = self.config.obter("num_images")
-            tempo_inicial = self.config.obter("start_time")
-            intervalo = self.config.obter("time_increment")
-            img_duration = self.config.obter("img_duration")
-            formato = self.config.obter("output_format")
-            sufixo = self.config.obter("txt_suffix")
-            escala = self.config.obter("escala_nm_por_px")
+            self._set_status(f"Processando {len(imagens)} imagens...")
+            log.info(f"Iniciando processamento de {len(imagens)} imagens")
 
             # Diretório de saída
-            nome_base = Path(caminho).stem
+            nome_base = Path(pasta).name or "saida"
             out_dir = Path.home() / "cam-tool" / "Output" / nome_base
             img_dir = out_dir / "Images"
             img_dir.mkdir(parents=True, exist_ok=True)
 
-            frames_anotados = []
-            medicoes = []
+            medicoes: List[Medicao] = []
+            sucessos = 0
+            falhas = 0
 
-            with VideoReader(Path(caminho)) as video:
-                for i in range(num_images):
-                    tempo_abs = tempo_inicial + i * intervalo
-                    if tempo_abs > video.duracao:
-                        log.warning(f"Frame {i} excede duração do vídeo; parando.")
-                        break
-
-                    frame = video.ler_frame_em(tempo_abs)
+            for i, caminho_img in enumerate(imagens):
+                try:
+                    frame = ImageLoader.carregar(caminho_img)
                     if frame is None:
+                        log.warning(f"[{i+1}/{len(imagens)}] Falha ao carregar: {caminho_img.name}")
+                        falhas += 1
                         continue
 
-                    tempo_rel = tempo_abs - tempo_inicial
-                    texto_tempo = f"{tempo_rel:.0f} {sufixo}"
-
-                    resultado = self.analyzer.analisar(frame, texto_tempo=texto_tempo)
+                    resultado = self.analyzer.analisar(frame, texto_tempo=None)
                     if not resultado.sucesso:
-                        log.warning(f"Frame {i} falhou: {resultado.erro}")
+                        log.warning(
+                            f"[{i+1}/{len(imagens)}] {caminho_img.name}: {resultado.erro}"
+                        )
+                        falhas += 1
                         continue
 
-                    frames_anotados.append(resultado.imagem_anotada)
-                    medicoes.append(Medicao.de_resultado(resultado, tempo=tempo_rel))
+                    # Salva PNG anotado
+                    nome_saida = f"{caminho_img.stem}_anotada.png"
+                    ImageWriter.salvar(resultado.imagem_anotada, img_dir / nome_saida)
 
-                    # Salva imagem anotada
-                    nome_img = f"frame_{tempo_rel:.1f}{sufixo}.png"
-                    cv2.imwrite(str(img_dir / nome_img), resultado.imagem_anotada)
+                    # Cria Medicao (tempo = 0 porque não é vídeo)
+                    medicoes.append(
+                        Medicao.de_resultado(resultado, tempo=float(i))
+                    )
 
-            if not frames_anotados:
-                self._set_status("Nenhum frame processado com sucesso.")
-                return
+                    sucessos += 1
+                    log.info(
+                        f"[{i+1}/{len(imagens)}] {caminho_img.name}: "
+                        f"L={resultado.largura_nm:.0f} "
+                        f"H={resultado.altura_nm:.0f} "
+                        f"R={resultado.raio_nm:.0f}"
+                    )
 
-            # Monta slideshow
-            ext = formato.lower()
-            caminho_slideshow = out_dir / f"{nome_base}.{ext}"
-            sucesso = construir_slideshow(
-                frames_anotados,
-                caminho_slideshow,
-                formato=formato,
-                duracao_ms=int(img_duration * 1000),
-            )
+                except Exception as e:
+                    log.error(f"[{i+1}/{len(imagens)}] {caminho_img.name}: {e}")
+                    falhas += 1
 
-            if not sucesso:
-                self._set_status("Falha ao montar slideshow.")
-                return
-
-            # Salva planilha
-            nome_xlsx = gerar_nome_planilha(nome_base, "xlsx")
-            caminho_xlsx = out_dir / nome_xlsx
-            exportar_xlsx(medicoes, caminho_xlsx)
+            # Gera XLSX (se houver medições)
+            if medicoes:
+                nome_xlsx = gerar_nome_planilha(nome_base, "xlsx")
+                caminho_xlsx = out_dir / nome_xlsx
+                exportar_xlsx(medicoes, caminho_xlsx)
+                log.info(f"Planilha: {caminho_xlsx}")
 
             self._set_status(
-                f"Concluído: {len(frames_anotados)} frames, "
-                f"{formato}, planilha salva."
+                f"Concluído: {sucessos} sucessos, {falhas} falhas. "
+                f"Saída em {out_dir}"
             )
-            log.info(f"Slideshow concluído: {caminho_slideshow}")
-            log.info(f"Planilha: {caminho_xlsx}")
+            log.info(f"Processamento concluído: {sucessos} ok, {falhas} falhas")
 
         except Exception as e:
-            log.error(f"Erro na compilação: {e}")
+            log.error(f"Erro no processamento: {e}")
             self._set_status(f"Erro: {e}")
 
     # ------------------------------------------------------------------
