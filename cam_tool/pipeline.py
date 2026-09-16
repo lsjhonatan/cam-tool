@@ -5,14 +5,14 @@ Orquestra todas as etapas da análise de uma gota:
     1. Segmentação
     2. Extração de contorno
     3. Ajuste de baseline
-    4. Ajuste de elipse (validada contra a baseline)
-    5. Cálculo de ângulos
-    6. Renderização do overlay
+    4. Medições (largura, altura, raio, volume, área, ângulo)
+    5. Renderização do overlay
 
 Uso típico:
     from cam_tool.pipeline import DropletAnalyzer, ParametrosAnalise
     analyzer = DropletAnalyzer(ParametrosAnalise(roi_x1=750, roi_x2=1700))
     resultado = analyzer.analisar(frame)
+    resultado.medidas.largura_nm
 """
 
 from __future__ import annotations
@@ -22,11 +22,10 @@ from typing import Optional
 
 import numpy as np
 
-from cam_tool.angle import AngulosContato, AngleCalculator
 from cam_tool.baseline import BaselineFitter, LinhaBase
 from cam_tool.contour import ContourExtractor, ResultadoContorno
-from cam_tool.ellipse import EllipseFitter, Elipse
 from cam_tool.log import get_logger
+from cam_tool.measurements import MedidasGota, MedidorGota
 from cam_tool.overlay import EstiloOverlay, OverlayRenderer
 from cam_tool.segmentation import ParametrosSegmentacao, Segmenter
 
@@ -43,10 +42,9 @@ class ParametrosAnalise:
     roi_x1: int = 750
     roi_x2: int = 1700
     baseline_threshold: float = 15.0
-    droplet_threshold: float = 50.0
-    tolerancia_contato_px: float = 2.0
-    tolerancia_baseline_elipse_px: float = 50.0
-    passo_varredura_graus: float = 1.0
+    tolerancia_contato_px: float = 3.0
+    escala_nm_por_px: float = 1.0
+    unidade_saida: str = "nm"
     kernel_blur: int = 7
     kernel_morph_open: int = 5
     kernel_morph_close: int = 9
@@ -62,27 +60,21 @@ class ParametrosAnalise:
             contorno_cor=(cfg.obter("contour_b"), cfg.obter("contour_g"), cfg.obter("contour_r")),
             contorno_desenhar=cfg.obter("draw_contour"),
 
-            gota_cor=(cfg.obter("droplet_b"), cfg.obter("droplet_g"), cfg.obter("droplet_r")),
-            gota_desenhar=cfg.obter("draw_droplet"),
-
             baseline_cor=(cfg.obter("baseline_b"), cfg.obter("baseline_g"), cfg.obter("baseline_r")),
             baseline_desenhar=cfg.obter("draw_baseline"),
 
-            tangente_cor=(cfg.obter("tangent_b"), cfg.obter("tangent_g"), cfg.obter("tangent_r")),
-            tangente_desenhar=cfg.obter("draw_tangent"),
+            medida_cor=(cfg.obter("measure_b"), cfg.obter("measure_g"), cfg.obter("measure_r")),
+            medida_desenhar=cfg.obter("draw_measure"),
+            medida_fonte_tamanho=cfg.obter("measure_font_size"),
+            medida_fonte_espessura=cfg.obter("measure_font_thickness"),
+            medida_offset=(cfg.obter("measure_offset_x"), cfg.obter("measure_offset_y")),
 
-            angulo_cor=(cfg.obter("angle_b"), cfg.obter("angle_g"), cfg.obter("angle_r")),
-            angulo_desenhar=cfg.obter("draw_angle"),
-            angulo_fonte_tamanho=cfg.obter("angle_font_size"),
-            angulo_fonte_espessura=cfg.obter("angle_font_thickness"),
-            angulo_offset_esq=(
-                cfg.obter("left_angle_x_pos") - 170,
-                cfg.obter("left_angle_y_pos") - 90,
+            linha_dimensao_cor=(
+                cfg.obter("dimension_line_b"),
+                cfg.obter("dimension_line_g"),
+                cfg.obter("dimension_line_r"),
             ),
-            angulo_offset_dir=(
-                cfg.obter("right_angle_x_pos") + 30,
-                cfg.obter("right_angle_y_pos") - 90,
-            ),
+            linha_dimensao_desenhar=cfg.obter("draw_dimension_line"),
 
             tempo_cor_texto=(
                 cfg.obter("label_text_b"),
@@ -105,7 +97,9 @@ class ParametrosAnalise:
             roi_x1=cfg.obter("roi_x1"),
             roi_x2=cfg.obter("roi_x2"),
             baseline_threshold=cfg.obter("baseline_threshold"),
-            droplet_threshold=cfg.obter("droplet_threshold"),
+            tolerancia_contato_px=cfg.obter("tolerancia_contato_px"),
+            escala_nm_por_px=cfg.obter("escala_nm_por_px"),
+            unidade_saida=cfg.obter("unidade_saida"),
             estilo=estilo,
         )
 
@@ -117,25 +111,29 @@ class ParametrosAnalise:
 @dataclass
 class ResultadoAnalise:
     """Resultado completo de uma análise de gota."""
-    angulos: Optional[AngulosContato] = None
+    medidas: Optional[MedidasGota] = None
     contorno: Optional[ResultadoContorno] = None
     baseline: Optional[LinhaBase] = None
-    elipse: Optional[Elipse] = None
     imagem_anotada: Optional[np.ndarray] = None
     sucesso: bool = False
     erro: Optional[str] = None
 
+    # Atalhos convenientes
     @property
-    def angulo_esquerdo(self) -> Optional[float]:
-        return self.angulos.esquerdo if self.angulos else None
+    def largura_nm(self) -> Optional[float]:
+        return self.medidas.largura_nm if self.medidas else None
 
     @property
-    def angulo_direito(self) -> Optional[float]:
-        return self.angulos.direito if self.angulos else None
+    def altura_nm(self) -> Optional[float]:
+        return self.medidas.altura_nm if self.medidas else None
 
     @property
-    def angulo_medio(self) -> Optional[float]:
-        return self.angulos.media if self.angulos else None
+    def raio_nm(self) -> Optional[float]:
+        return self.medidas.raio_nm if self.medidas else None
+
+    @property
+    def angulo_graus(self) -> Optional[float]:
+        return self.medidas.angulo_graus if self.medidas else None
 
 
 # ---------------------------------------------------------------------------
@@ -160,10 +158,8 @@ class DropletAnalyzer:
             roi_x2=self.parametros.roi_x2,
         )
         self._baseline_fitter = BaselineFitter()
-        self._ellipse_fitter = EllipseFitter()
-        self._angle_calculator = AngleCalculator(
-            tolerancia_px=self.parametros.tolerancia_contato_px,
-            passo_graus=self.parametros.passo_varredura_graus,
+        self._medidor = MedidorGota(
+            tolerancia_contato_px=self.parametros.tolerancia_contato_px,
         )
         self._overlay_renderer = OverlayRenderer(self.parametros.estilo)
 
@@ -191,7 +187,7 @@ class DropletAnalyzer:
                     erro="Contorno não encontrado",
                 )
 
-            # 3. Baseline PRIMEIRO
+            # 3. Baseline
             baseline = self._baseline_fitter.ajustar(
                 contorno.pontos,
                 percentual_baixos=self.parametros.baseline_threshold,
@@ -203,51 +199,36 @@ class DropletAnalyzer:
                     erro="Ajuste de baseline falhou",
                 )
 
-            # 4. Elipse, VALIDADA contra a baseline
-            elipse = self._ellipse_fitter.ajustar(
-                contorno.pontos,
-                percentual_altos=self.parametros.droplet_threshold,
-                imagem_forma=imagem.shape[:2],
-                baseline=baseline,
-                tolerancia_baseline=self.parametros.tolerancia_baseline_elipse_px,
+            # 4. Medições
+            medidas = self._medidor.medir(
+                contorno,
+                baseline,
+                escala_nm_por_px=self.parametros.escala_nm_por_px,
             )
-            if elipse is None:
+            if medidas is None:
                 return ResultadoAnalise(
                     contorno=contorno,
                     baseline=baseline,
                     sucesso=False,
-                    erro="Ajuste de elipse falhou",
+                    erro="Medição falhou",
                 )
 
-            # 5. Ângulos
-            angulos = self._angle_calculator.calcular(elipse, baseline)
-            if angulos.esquerdo is None or angulos.direito is None:
-                return ResultadoAnalise(
-                    contorno=contorno,
-                    baseline=baseline,
-                    elipse=elipse,
-                    angulos=angulos,
-                    sucesso=False,
-                    erro="Cálculo de ângulos falhou",
-                )
-
-            # 6. Overlay
+            # 5. Overlay
             imagem_anotada = self._overlay_renderer.renderizar(
                 imagem,
                 contorno=contorno,
                 baseline=baseline,
-                elipse=elipse,
-                angulos=angulos,
+                medidas=medidas,
                 roi_x1=self.parametros.roi_x1 if self.parametros.estilo.roi_desenhar else None,
                 roi_x2=self.parametros.roi_x2 if self.parametros.estilo.roi_desenhar else None,
                 texto_tempo=texto_tempo,
+                unidade=self.parametros.unidade_saida,
             )
 
             return ResultadoAnalise(
-                angulos=angulos,
+                medidas=medidas,
                 contorno=contorno,
                 baseline=baseline,
-                elipse=elipse,
                 imagem_anotada=imagem_anotada,
                 sucesso=True,
             )

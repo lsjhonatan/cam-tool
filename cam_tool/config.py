@@ -59,7 +59,6 @@ class Parametro:
 # Tabela de parâmetros do programa
 # ---------------------------------------------------------------------------
 # Esta tabela é a ÚNICA fonte de verdade sobre os parâmetros.
-# Tudo (GUI, análise, exportação) lê daqui.
 
 PARAMETROS: Dict[str, Parametro] = {
     # --- Arquivo de vídeo ---
@@ -76,7 +75,19 @@ PARAMETROS: Dict[str, Parametro] = {
         descricao="Nome do arquivo de vídeo (sem diretório)",
     ),
 
-    # --- Fontes do rótulo de tempo ---
+    # --- Calibração ---
+    "escala_nm_por_px": Parametro(
+        chave="escala_nm_por_px",
+        padrao=1.0, tipo=float, minimo=0.0001, maximo=1e9,
+        descricao="Fator de conversão de pixels para nanômetros",
+    ),
+    "unidade_saida": Parametro(
+        chave="unidade_saida",
+        padrao="nm", tipo=str,
+        descricao="Unidade exibida nos rótulos (nm, µm, mm)",
+    ),
+
+    # --- Fontes dos rótulos ---
     "label_font_size": Parametro(
         chave="label_font_size",
         padrao=20, tipo=int, minimo=1, maximo=200,
@@ -98,48 +109,37 @@ PARAMETROS: Dict[str, Parametro] = {
         descricao="Deslocamento vertical do rótulo de tempo",
     ),
 
-    # --- Fontes dos ângulos ---
-    "angle_font_size": Parametro(
-        chave="angle_font_size",
-        padrao=26, tipo=int, minimo=1, maximo=200,
-        descricao="Tamanho da fonte dos rótulos de ângulo",
+    # --- Fontes das medidas ---
+    "measure_font_size": Parametro(
+        chave="measure_font_size",
+        padrao=22, tipo=int, minimo=1, maximo=200,
+        descricao="Tamanho da fonte dos rótulos de medidas",
     ),
-    "angle_font_thickness": Parametro(
-        chave="angle_font_thickness",
-        padrao=3, tipo=int, minimo=0, maximo=10,
-        descricao="Espessura do contorno dos rótulos de ângulo",
+    "measure_font_thickness": Parametro(
+        chave="measure_font_thickness",
+        padrao=1, tipo=int, minimo=0, maximo=10,
+        descricao="Espessura do contorno dos rótulos de medidas",
     ),
-    "left_angle_x_pos": Parametro(
-        chave="left_angle_x_pos",
+    "measure_offset_x": Parametro(
+        chave="measure_offset_x",
         padrao=0, tipo=int, minimo=-2000, maximo=2000,
-        descricao="Deslocamento X do rótulo do ângulo esquerdo",
+        descricao="Deslocamento X do painel de medidas",
     ),
-    "left_angle_y_pos": Parametro(
-        chave="left_angle_y_pos",
+    "measure_offset_y": Parametro(
+        chave="measure_offset_y",
         padrao=0, tipo=int, minimo=-2000, maximo=2000,
-        descricao="Deslocamento Y do rótulo do ângulo esquerdo",
-    ),
-    "right_angle_x_pos": Parametro(
-        chave="right_angle_x_pos",
-        padrao=0, tipo=int, minimo=-2000, maximo=2000,
-        descricao="Deslocamento X do rótulo do ângulo direito",
-    ),
-    "right_angle_y_pos": Parametro(
-        chave="right_angle_y_pos",
-        padrao=0, tipo=int, minimo=-2000, maximo=2000,
-        descricao="Deslocamento Y do rótulo do ângulo direito",
+        descricao="Deslocamento Y do painel de medidas",
     ),
 
     # --- Cores (RGB) dos elementos do overlay ---
-    # Cada elemento tem R, G, B e um checkbox "draw" (desenhar ou não)
-    "label_background_r": Parametro("label_background_r", 0, int, 0, 255, "R do fundo do rótulo"),
-    "label_background_g": Parametro("label_background_g", 0, int, 0, 255, "G do fundo do rótulo"),
-    "label_background_b": Parametro("label_background_b", 0, int, 0, 255, "B do fundo do rótulo"),
-    "draw_label_background": Parametro("draw_label_background", False, bool, None, None, "Desenhar fundo do rótulo"),
+    "label_background_r": Parametro("label_background_r", 255, int, 0, 255, "R do fundo do rótulo"),
+    "label_background_g": Parametro("label_background_g", 255, int, 0, 255, "G do fundo do rótulo"),
+    "label_background_b": Parametro("label_background_b", 255, int, 0, 255, "B do fundo do rótulo"),
+    "draw_label_background": Parametro("draw_label_background", True, bool, None, None, "Desenhar fundo do rótulo"),
 
-    "label_text_r": Parametro("label_text_r", 255, int, 0, 255, "R do texto do rótulo"),
-    "label_text_g": Parametro("label_text_g", 255, int, 0, 255, "G do texto do rótulo"),
-    "label_text_b": Parametro("label_text_b", 255, int, 0, 255, "B do texto do rótulo"),
+    "label_text_r": Parametro("label_text_r", 0, int, 0, 255, "R do texto do rótulo"),
+    "label_text_g": Parametro("label_text_g", 0, int, 0, 255, "G do texto do rótulo"),
+    "label_text_b": Parametro("label_text_b", 0, int, 0, 255, "B do texto do rótulo"),
     "draw_label_text": Parametro("draw_label_text", True, bool, None, None, "Desenhar texto do rótulo"),
 
     "region_r": Parametro("region_r", 255, int, 0, 255, "R do retângulo da ROI"),
@@ -152,25 +152,20 @@ PARAMETROS: Dict[str, Parametro] = {
     "contour_b": Parametro("contour_b", 0, int, 0, 255, "B do contorno completo"),
     "draw_contour": Parametro("draw_contour", True, bool, None, None, "Desenhar contorno completo"),
 
-    "droplet_r": Parametro("droplet_r", 0, int, 0, 255, "R do contorno da gota"),
-    "droplet_g": Parametro("droplet_g", 255, int, 0, 255, "G do contorno da gota"),
-    "droplet_b": Parametro("droplet_b", 0, int, 0, 255, "B do contorno da gota"),
-    "draw_droplet": Parametro("draw_droplet", True, bool, None, None, "Desenhar contorno da gota"),
-
-    "tangent_r": Parametro("tangent_r", 0, int, 0, 255, "R das tangentes"),
-    "tangent_g": Parametro("tangent_g", 0, int, 0, 255, "G das tangentes"),
-    "tangent_b": Parametro("tangent_b", 255, int, 0, 255, "B das tangentes"),
-    "draw_tangent": Parametro("draw_tangent", True, bool, None, None, "Desenhar tangentes"),
-
-    "angle_r": Parametro("angle_r", 0, int, 0, 255, "R dos rótulos de ângulo"),
-    "angle_g": Parametro("angle_g", 0, int, 0, 255, "G dos rótulos de ângulo"),
-    "angle_b": Parametro("angle_b", 0, int, 0, 255, "B dos rótulos de ângulo"),
-    "draw_angle": Parametro("draw_angle", True, bool, None, None, "Desenhar rótulos de ângulo"),
-
     "baseline_r": Parametro("baseline_r", 255, int, 0, 255, "R da linha de base"),
     "baseline_g": Parametro("baseline_g", 0, int, 0, 255, "G da linha de base"),
     "baseline_b": Parametro("baseline_b", 0, int, 0, 255, "B da linha de base"),
     "draw_baseline": Parametro("draw_baseline", True, bool, None, None, "Desenhar linha de base"),
+
+    "measure_r": Parametro("measure_r", 0, int, 0, 255, "R dos rótulos de medidas"),
+    "measure_g": Parametro("measure_g", 0, int, 0, 255, "G dos rótulos de medidas"),
+    "measure_b": Parametro("measure_b", 0, int, 0, 255, "B dos rótulos de medidas"),
+    "draw_measure": Parametro("draw_measure", True, bool, None, None, "Desenhar medidas"),
+
+    "dimension_line_r": Parametro("dimension_line_r", 0, int, 0, 255, "R das linhas de dimensão"),
+    "dimension_line_g": Parametro("dimension_line_g", 0, int, 0, 255, "G das linhas de dimensão"),
+    "dimension_line_b": Parametro("dimension_line_b", 0, int, 0, 255, "B das linhas de dimensão"),
+    "draw_dimension_line": Parametro("draw_dimension_line", True, bool, None, None, "Desenhar linhas de dimensão"),
 
     # --- Coleta de imagens ---
     "num_images": Parametro(
@@ -205,10 +200,10 @@ PARAMETROS: Dict[str, Parametro] = {
         padrao=15, tipo=float, minimo=0.0, maximo=100.0,
         descricao="Porcentagem do contorno usada para ajustar a baseline",
     ),
-    "droplet_threshold": Parametro(
-        chave="droplet_threshold",
-        padrao=50, tipo=float, minimo=0.0, maximo=100.0,
-        descricao="Porcentagem do contorno usada para ajustar a elipse",
+    "tolerancia_contato_px": Parametro(
+        chave="tolerancia_contato_px",
+        padrao=3.0, tipo=float, minimo=0.1, maximo=50.0,
+        descricao="Distância máxima (px) para considerar contato com a baseline",
     ),
 
     # --- Zoom ---
@@ -362,12 +357,7 @@ class ConfigManager:
     # ------------------------------------------------------------------
 
     def carregar(self) -> None:
-        """
-        Lê o arquivo Settings.txt e atualiza os valores.
-
-        Linhas inválidas são ignoradas com aviso. Chaves desconhecidas
-        são ignoradas silenciosamente (para compatibilidade futura).
-        """
+        """Lê o arquivo Settings.txt e atualiza os valores."""
         if not self.caminho.is_file():
             log.info(f"Arquivo de configuração não encontrado: {self.caminho}")
             log.info("Usando valores padrão.")
@@ -388,7 +378,6 @@ class ConfigManager:
                     valor_str = valor_str.strip()
 
                     if chave not in PARAMETROS:
-                        # Chave desconhecida: ignora silenciosamente
                         continue
 
                     valor = self._converter(valor_str, PARAMETROS[chave])
@@ -409,13 +398,13 @@ class ConfigManager:
                 f.write("# Formato: chave=valor\n")
                 f.write("# Linhas começando com # são ignoradas\n\n")
 
-                # Agrupa por prefixo para legibilidade
                 grupos = {
                     "Vídeo": ["video_file_path", "video_file_name"],
-                    "Fontes": [k for k in PARAMETROS if "font" in k or "offset" in k or "angle_x_pos" in k or "angle_y_pos" in k],
+                    "Calibração": ["escala_nm_por_px", "unidade_saida"],
+                    "Fontes": [k for k in PARAMETROS if "font" in k or "offset" in k],
                     "Cores": [k for k in PARAMETROS if any(p in k for p in ("_r", "_g", "_b", "draw_"))],
                     "Coleta": ["num_images", "time_increment", "start_time", "roi_x1", "roi_x2"],
-                    "Análise": ["baseline_threshold", "droplet_threshold"],
+                    "Análise": ["baseline_threshold", "tolerancia_contato_px"],
                     "Zoom": ["zoom_x", "zoom_y", "zoom_size"],
                     "Compilação": ["img_duration", "output_format", "txt_suffix"],
                 }
@@ -430,7 +419,6 @@ class ConfigManager:
                         f.write(f"{chave}={self._formatar(self._valores[chave])}\n")
                     f.write("\n")
 
-                # Restantes (se houver)
                 restantes = [k for k in self._valores if k not in vistos]
                 if restantes:
                     f.write("# --- Outros ---\n")
@@ -446,14 +434,10 @@ class ConfigManager:
         """
         Restaura todos os parâmetros para os valores padrão.
 
-        Diferente de apenas chamar definir() para cada chave, este método
-        força a notificação de TODOS os parâmetros, mesmo aqueles que já
-        estão no valor padrão. Isso garante que a GUI seja atualizada
-        corretamente após um reset.
+        Notifica todos os callbacks, mesmo os que já estavam no padrão.
         """
         for chave, param in PARAMETROS.items():
             self._valores[chave] = param.padrao
-            # Notifica sempre, mesmo se o valor não mudou
             self._notificar(chave, param.padrao)
 
         log.info("Configurações restauradas para os padrões.")
@@ -469,7 +453,7 @@ class ConfigManager:
             if param.tipo is bool:
                 return valor_str.lower() in ("true", "1", "yes", "sim")
             if param.tipo is int:
-                return int(float(valor_str))  # aceita "10" e "10.0"
+                return int(float(valor_str))
             if param.tipo is float:
                 return float(valor_str)
             return valor_str
@@ -483,7 +467,6 @@ class ConfigManager:
         if isinstance(valor, bool):
             return "1" if valor else "0"
         if isinstance(valor, float):
-            # Evita "10.0" para inteiros disfarçados
             if valor.is_integer():
                 return str(int(valor))
             return str(valor)
