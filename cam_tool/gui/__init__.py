@@ -9,6 +9,6 @@ Contém:
     - widgets.py:        Widgets customizados (color picker row, etc.)
 """
 
-# Descomentar na Parte 5, quando o app.py existir:
-# from cam_tool.gui.app import App
-# __all__ = ["App"]
+from cam_tool.gui.app import App
+
+__all__ = ["App"]
