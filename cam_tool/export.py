@@ -9,7 +9,7 @@ Responsável por:
 Uso típico:
     from cam_tool.export import Medicao, exportar_csv, exportar_xlsx
     medicoes = [
-        Medicao(tempo=0.0, angulo_esquerdo=96.1, angulo_direito=91.7),
+        Medicao(tempo=0.0, largura_nm=69500, altura_nm=14067, raio_nm=49955),
     ]
     exportar_csv(medicoes, Path("resultado.csv"))
     exportar_xlsx(medicoes, Path("resultado.xlsx"))
@@ -27,12 +27,19 @@ from cam_tool.log import get_logger
 
 log = get_logger()
 
-# Cabeçalhos da planilha (mantidos em PT-BR para o usuário final)
+
+# ---------------------------------------------------------------------------
+# Cabeçalhos da planilha
+# ---------------------------------------------------------------------------
+
 CABECALHOS = [
     "Tempo (s)",
-    "Ângulo Esquerdo (°)",
-    "Ângulo Direito (°)",
-    "Média (°)",
+    "Largura (nm)",
+    "Altura (nm)",
+    "Raio R (nm)",
+    "Volume (nm³)",
+    "Área de Contato (nm²)",
+    "Ângulo (°)",
 ]
 
 
@@ -43,36 +50,83 @@ CABECALHOS = [
 @dataclass
 class Medicao:
     """
-    Representa uma medição de ângulo de contato em um instante.
+    Representa uma medição de uma gota em um instante.
+
+    Todas as medidas em nanômetros (nm) ou nm² / nm³ para área/volume.
 
     Atributos:
-        tempo:            tempo decorrido desde o início da coleta (s)
-        angulo_esquerdo:  ângulo do lado esquerdo (°) ou None
-        angulo_direito:   ângulo do lado direito (°) ou None
+        tempo:             tempo decorrido desde o início da coleta (s)
+        largura_nm:        diâmetro da base da gota (nm)
+        altura_nm:         altura da gota (nm)
+        raio_nm:           raio da esfera que contém a calota (nm)
+        volume_nm3:        volume da calota (nm³)
+        area_contato_nm2:  área da base (nm²)
+        angulo_graus:      ângulo de contato (°)
+        escala_nm_por_px:  calibração usada (nm/px) — registro
     """
     tempo: float
-    angulo_esquerdo: Optional[float]
-    angulo_direito: Optional[float]
-
-    @property
-    def media(self) -> Optional[float]:
-        """Média dos dois ângulos, se ambos existirem."""
-        if self.angulo_esquerdo is None or self.angulo_direito is None:
-            return None
-        return (self.angulo_esquerdo + self.angulo_direito) / 2.0
+    largura_nm: Optional[float] = None
+    altura_nm: Optional[float] = None
+    raio_nm: Optional[float] = None
+    volume_nm3: Optional[float] = None
+    area_contato_nm2: Optional[float] = None
+    angulo_graus: Optional[float] = None
+    escala_nm_por_px: float = 1.0
 
     def para_linha(self) -> List:
-        """Retorna a linha formatada para CSV/XLSX."""
+        """
+        Retorna a linha formatada para CSV/XLSX.
+
+        Valores arredondados:
+            - Tempo: 2 casas
+            - Medidas em nm: 1 casa
+            - Volume: 0 casas (é grande)
+            - Área: 0 casas
+            - Ângulo: 1 casa
+        """
         return [
             round(self.tempo, 2),
-            round(self.angulo_esquerdo, 1) if self.angulo_esquerdo is not None else None,
-            round(self.angulo_direito, 1) if self.angulo_direito is not None else None,
-            round(self.media, 1) if self.media is not None else None,
+            round(self.largura_nm, 1) if self.largura_nm is not None else None,
+            round(self.altura_nm, 1) if self.altura_nm is not None else None,
+            round(self.raio_nm, 1) if self.raio_nm is not None else None,
+            round(self.volume_nm3, 0) if self.volume_nm3 is not None else None,
+            round(self.area_contato_nm2, 0) if self.area_contato_nm2 is not None else None,
+            round(self.angulo_graus, 1) if self.angulo_graus is not None else None,
         ]
+
+    @classmethod
+    def de_resultado(cls, resultado, tempo: float) -> "Medicao":
+        """
+        Cria uma Medicao a partir de um ResultadoAnalise do pipeline.
+
+        Parâmetros:
+            resultado:  ResultadoAnalise (com .medidas preenchido)
+            tempo:      tempo decorrido (s)
+
+        Se resultado.medidas for None, retorna uma Medicao vazia.
+        """
+        if resultado is None or resultado.medidas is None:
+            return cls(tempo=tempo)
+
+        m = resultado.medidas
+        escala = m.escala_nm_por_px
+
+        return cls(
+            tempo=tempo,
+            largura_nm=m.largura_nm,
+            altura_nm=m.altura_nm,
+            raio_nm=m.raio_nm,
+            # Volume em px³ → nm³ = px³ × escala³
+            volume_nm3=m.volume_px3 * (escala ** 3),
+            # Área em px² → nm² = px² × escala²
+            area_contato_nm2=m.area_contato_px2 * (escala ** 2),
+            angulo_graus=m.angulo_graus,
+            escala_nm_por_px=escala,
+        )
 
 
 # ---------------------------------------------------------------------------
-# Exportação CSV
+# Formatação de números para CSV
 # ---------------------------------------------------------------------------
 
 def _formatar_numero_csv(valor, decimal_virgula: bool) -> str:
@@ -84,10 +138,14 @@ def _formatar_numero_csv(valor, decimal_virgula: bool) -> str:
     """
     if valor is None:
         return ""
+
     if isinstance(valor, float):
-        texto = f"{valor:.2f}" if valor != int(valor) else str(int(valor))
-        # Remove zeros à direita desnecessários
-        texto = texto.rstrip("0").rstrip(".") if "." in texto else texto
+        # Volume e área: sem decimais
+        if abs(valor) >= 1000:
+            texto = f"{valor:.0f}"
+        else:
+            texto = f"{valor:.2f}"
+            texto = texto.rstrip("0").rstrip(".")
     else:
         texto = str(valor)
 
@@ -96,6 +154,10 @@ def _formatar_numero_csv(valor, decimal_virgula: bool) -> str:
 
     return texto
 
+
+# ---------------------------------------------------------------------------
+# Exportação CSV
+# ---------------------------------------------------------------------------
 
 def exportar_csv(
     medicoes: Iterable[Medicao],
@@ -108,11 +170,11 @@ def exportar_csv(
     Exporta uma lista de medições para CSV.
 
     Parâmetros:
-        medicoes:         iterável de Medicao
-        caminho:          caminho do arquivo .csv
+        medicoes:          iterável de Medicao
+        caminho:           caminho do arquivo .csv
         incluir_cabecalho: se True, escreve a linha de cabeçalho
-        separador:        delimitador de colunas (padrão: ";")
-        decimal_virgula:  se True, usa vírgula como separador decimal
+        separador:         delimitador de colunas (padrão: ";")
+        decimal_virgula:   se True, usa vírgula como separador decimal
 
     Retorna True se sucesso, False caso contrário.
     """
@@ -129,10 +191,8 @@ def exportar_csv(
 
             for med in medicoes:
                 linha = [
-                    _formatar_numero_csv(med.tempo, decimal_virgula),
-                    _formatar_numero_csv(med.angulo_esquerdo, decimal_virgula),
-                    _formatar_numero_csv(med.angulo_direito, decimal_virgula),
-                    _formatar_numero_csv(med.media, decimal_virgula),
+                    _formatar_numero_csv(v, decimal_virgula)
+                    for v in med.para_linha()
                 ]
                 writer.writerow(linha)
 
@@ -151,18 +211,20 @@ def exportar_csv(
 def exportar_xlsx(
     medicoes: Iterable[Medicao],
     caminho: Path,
-    nome_aba: str = "Ângulos de Contato",
+    nome_aba: str = "Medidas da Gota",
 ) -> bool:
     """
     Exporta uma lista de medições para XLSX.
 
-    A coluna "Média" é preenchida com uma FÓRMULA do Excel
-    (=AVERAGE(B2:C2)), não com valor calculado.
+    A coluna "Ângulo" é preenchida com uma FÓRMULA do Excel
+    (=DEGREES(2*ATAN(C2/(B2/2)))), calculada a partir da largura (B)
+    e altura (C). Isso permite que o usuário edite largura/altura
+    na planilha e veja o ângulo recalcular.
 
     Parâmetros:
-        medicoes:   iterável de Medicao
-        caminho:    caminho do arquivo .xlsx
-        nome_aba:   nome da aba da planilha
+        medicoes:  iterável de Medicao
+        caminho:   caminho do arquivo .xlsx
+        nome_aba:  nome da aba da planilha
 
     Retorna True se sucesso, False caso contrário.
     """
@@ -198,14 +260,19 @@ def exportar_xlsx(
         for i, med in enumerate(medicoes, start=2):
             linha = med.para_linha()
             ws.cell(row=i, column=1, value=linha[0])  # Tempo
-            ws.cell(row=i, column=2, value=linha[1])  # Esquerdo
-            ws.cell(row=i, column=3, value=linha[2])  # Direito
-            # Média: fórmula do Excel (não valor calculado)
-            ws.cell(row=i, column=4, value=f"=AVERAGE(B{i}:C{i})")
+            ws.cell(row=i, column=2, value=linha[1])  # Largura
+            ws.cell(row=i, column=3, value=linha[2])  # Altura
+            ws.cell(row=i, column=4, value=linha[3])  # Raio R
+            ws.cell(row=i, column=5, value=linha[4])  # Volume
+            ws.cell(row=i, column=6, value=linha[5])  # Área
+            # Ângulo: fórmula do Excel
+            # θ = 2 * atan(altura / (largura/2)) em graus
+            ws.cell(row=i, column=7, value=f"=DEGREES(2*ATAN(C{i}/(B{i}/2)))")
 
         # Ajusta largura das colunas
-        for col in range(1, len(CABECALHOS) + 1):
-            ws.column_dimensions[get_column_letter(col)].width = 20
+        larguras = [12, 16, 16, 16, 18, 18, 14]
+        for col, larg in enumerate(larguras, start=1):
+            ws.column_dimensions[get_column_letter(col)].width = larg
 
         wb.save(caminho)
         log.info(f"XLSX salvo: {caminho}")
@@ -229,7 +296,7 @@ def gerar_nome_planilha(nome_base: str, extensao: str = "xlsx") -> str:
 
     Exemplo:
         gerar_nome_planilha("gota")
-        -> "gota_ContactAngles_[16-09-2026_17-55-00].xlsx"
+        -> "gota_Medidas_[16-09-2026_18-25-00].xlsx"
     """
     timestamp = datetime.now().strftime("[%d-%m-%Y_%H.%M.%S]")
-    return f"{nome_base}_ContactAngles_{timestamp}.{extensao}"
+    return f"{nome_base}_Medidas_{timestamp}.{extensao}"
