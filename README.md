@@ -240,14 +240,3 @@ se 1 pixel equivale a 500 nanômetros, o valor deve ser 500.
 
 Este projeto é distribuído sob a GNU General Public License v3.0.
 Veja o arquivo LICENSE para o texto completo.
-
-## Créditos
-
-Baseado conceitualmente em:
-
-- **ContactAngleMeasurement** de Mike Phillips
-  https://github.com/MikePhillips123/ContactAngleMeasurement
-
-O cam-tool é uma reescrita independente, com arquitetura própria,
-implementação do zero e modelo físico diferente (calota esférica
-em vez de ajuste de elipse).
